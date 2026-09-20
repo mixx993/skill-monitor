@@ -1,0 +1,68 @@
+# SkillMonitor
+
+一个 macOS 原生悬浮窗，显示**最新一次任务**中 Claude Code 调用了哪些 skill 和 MCP 工具。
+
+## 组成
+
+| 文件 | 作用 |
+|---|---|
+| `hook/log.py` | Claude Code hook：把调用写进 `~/.claude/skill-monitor/state.json` |
+| `app/Island.swift` | 灵动岛视图 + 状态轮询（0.3 秒） |
+| `app/main.swift` | 窗口层：透明、无边框、菜单栏之上、贴刘海 |
+| `tools/preview/main.swift` | 离屏渲染预览图 |
+| `build.sh` | 编译出 `dist/SkillMonitor.app` |
+| `uninstall.sh` | 从 settings.json 摘掉 hook 并退出 app |
+
+## 工作原理
+
+三个 hook 写进 `~/.claude/settings.json`：
+
+- `UserPromptSubmit` → 清空状态，开一轮新任务（同步，确保早于第一个工具调用）
+
+  ⚠️ 这个事件**不只在你打字时触发**：后台任务完成通知、system-reminder、CI 事件等 harness 往会话里注入的内容也算一次提交。
+  `log.py` 里的 `is_injected()` 把它们挡掉（识别 `<task-notification`、`<system-reminder`、
+  `[SYSTEM NOTIFICATION` 等开头），否则一条后台通知就会把计数清零、并把原始 XML 当提示词显示出来。
+- `PreToolUse`，matcher `Skill|mcp__.*` → 记一条调用（异步，不增加延迟）
+- `Stop` → 把状态标成 done（绿点变灰）
+
+重复调用同一个 skill 会合并成 `×N`，不会刷屏。
+
+## 数据
+
+- `~/.claude/skill-monitor/state.json` — 当前这一轮，面板读它
+- `~/.claude/skill-monitor/history.jsonl` — 跨会话流水（带 session_id、cwd），超过 2MB 自动轮转
+
+用来统计「哪些 skill 装了但从没用过」：
+
+```bash
+cut -d'"' -f16 ~/.claude/skill-monitor/history.jsonl | sort | uniq -c | sort -rn
+```
+
+## 界面：灵动岛
+
+挂在刘海正下方（无刘海的机器则嵌进菜单栏中间的空位），三个状态之间弹簧过渡：
+
+| 状态 | 样子 | 触发 |
+|---|---|---|
+| collapsed | `● 5` 小胶囊 | 空闲。绿点=任务进行中，灰点=已结束 |
+| flash | `docs / guide  04:53:44` | 新调用落地，2.2 秒后自动收回 |
+| expanded | 完整列表 | 鼠标移上去 |
+
+- 窗口层级在菜单栏之上、全空间跟随、永不抢焦点；透明区域点击直接穿透到下面的窗口
+- 紫色实心 ◆ = skill，青色空心 ◇ = MCP（显示成 `服务器 / 工具名`）
+- 退出：展开后点右上角 `×`，或在岛上右键 → 退出
+
+预览图在 `docs/`，由 `tools/preview/main.swift` 离屏渲染生成（不需要截屏权限）：
+
+```bash
+swiftc -O -framework AppKit -framework SwiftUI -o dist/preview-tool app/Island.swift tools/preview/main.swift
+./dist/preview-tool docs
+```
+
+## 开机自启
+
+系统设置 → 通用 → 登录项 → `+` → 选 `dist/SkillMonitor.app`
+
+## 注意
+
+hook 里写的是本目录的绝对路径。**移动这个文件夹后要改 `~/.claude/settings.json` 里的三条命令**，或者重跑安装。

@@ -1,0 +1,271 @@
+import AppKit
+import SwiftUI
+
+// MARK: - Model
+
+struct Call: Decodable, Identifiable {
+    let kind: String
+    let server: String?
+    let name: String
+    let count: Int
+    let time: String
+
+    var id: String { "\(kind)|\(server ?? "-")|\(name)" }
+    var isSkill: Bool { kind == "skill" }
+}
+
+struct TurnState: Decodable {
+    var prompt: String? = nil
+    var status: String? = nil
+    var started: String? = nil
+    var updated: String? = nil
+    var cwd: String? = nil
+    var calls: [Call]? = nil
+}
+
+// MARK: - Store
+
+final class Store: ObservableObject {
+    @Published private(set) var state = TurnState()
+    @Published private(set) var missing = true
+
+    private let url = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".claude/skill-monitor/state.json")
+    private var timer: Timer?
+    private var lastStamp: Date?
+
+    var calls: [Call] { state.calls ?? [] }
+    var isRunning: Bool { state.status == "running" }
+
+    var project: String? {
+        guard let cwd = state.cwd, !cwd.isEmpty else { return nil }
+        return (cwd as NSString).lastPathComponent
+    }
+
+    func start() {
+        reload(force: true)
+        let t = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
+            self?.reload(force: false)
+        }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+    }
+
+    private func reload(force: Bool) {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        guard let stamp = attrs?[.modificationDate] as? Date else {
+            if !missing { missing = true; state = TurnState() }
+            return
+        }
+        if !force, let last = lastStamp, last == stamp { return }
+        lastStamp = stamp
+
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode(TurnState.self, from: data) else { return }
+        missing = false
+        state = decoded
+    }
+}
+
+// MARK: - Chrome
+
+struct VisualEffect: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+struct Badge: View {
+    let call: Call
+
+    var body: some View {
+        Text(call.isSkill ? "SKILL" : "MCP")
+            .font(.system(size: 8, weight: .bold, design: .rounded))
+            .tracking(0.5)
+            .foregroundColor(.white)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(call.isSkill ? Color(red: 0.55, green: 0.42, blue: 0.93)
+                                       : Color(red: 0.16, green: 0.62, blue: 0.62))
+            )
+            .frame(width: 40, alignment: .leading)
+    }
+}
+
+struct Row: View {
+    let call: Call
+
+    private var subtitle: String? {
+        guard let server = call.server, !server.isEmpty else { return nil }
+        // MCP connector ids are sometimes raw UUIDs — keep them short.
+        let short = server.count > 18 ? String(server.prefix(8)) + "…" : server
+        return short
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Badge(call: call)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(call.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let subtitle = subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 4)
+            if call.count > 1 {
+                Text("×\(call.count)")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundColor(.secondary)
+            }
+            Text(call.time)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.secondary.opacity(0.7))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+    }
+}
+
+struct PanelView: View {
+    @ObservedObject var store: Store
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider().opacity(0.5)
+            if store.calls.isEmpty {
+                emptyState
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(store.calls) { call in
+                            Row(call: call)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .frame(minWidth: 240, minHeight: 140)
+        .background(VisualEffect().ignoresSafeArea())
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(store.isRunning ? Color.green : Color.secondary.opacity(0.5))
+                    .frame(width: 6, height: 6)
+                Text("本次任务")
+                    .font(.system(size: 11, weight: .semibold))
+                if let project = store.project {
+                    Text(project)
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if !store.calls.isEmpty {
+                    Text("\(store.calls.count)")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundColor(.secondary)
+                }
+                Button(action: { NSApp.terminate(nil) }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("退出 SkillMonitor")
+            }
+            if let prompt = store.state.prompt, !prompt.isEmpty {
+                Text(prompt)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 7)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 4) {
+            Spacer()
+            Text(store.missing ? "等待第一次调用" : "本次任务未调用 skill / MCP")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - App
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var panel: NSPanel?
+    private let store = Store()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 260),
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "SkillMonitor"
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        panel.isMovableByWindowBackground = true
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.hidesOnDeactivate = false
+        panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.isReleasedWhenClosed = false
+        panel.standardWindowButton(.closeButton)?.isHidden = true
+        panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        panel.standardWindowButton(.zoomButton)?.isHidden = true
+
+        panel.contentView = NSHostingView(rootView: PanelView(store: store))
+
+        let autosave = "SkillMonitorPanel"
+        let hasSavedFrame = UserDefaults.standard.string(forKey: "NSWindow Frame \(autosave)") != nil
+        panel.setFrameAutosaveName(autosave)
+
+        if !hasSavedFrame, let screen = NSScreen.main {
+            let visible = screen.visibleFrame
+            panel.setFrameOrigin(NSPoint(x: visible.maxX - panel.frame.width - 24,
+                                         y: visible.maxY - panel.frame.height - 24))
+        }
+
+        panel.orderFrontRegardless()
+        self.panel = panel
+        store.start()
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+}
+
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.run()
