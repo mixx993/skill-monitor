@@ -23,7 +23,20 @@
   `log.py` 里的 `is_injected()` 把它们挡掉（识别 `<task-notification`、`<system-reminder`、
   `[SYSTEM NOTIFICATION` 等开头），否则一条后台通知就会把计数清零、并把原始 XML 当提示词显示出来。
 - `PreToolUse`，matcher `Skill|mcp__.*` → 记一条调用（异步，不增加延迟）
+- `PostToolUse`，同样的 matcher → 把该次调用的耗时补上（载荷里直接带了 `duration_ms`，不用自己计时）
 - `Stop` → 把状态标成 done（绿点变灰）
+
+### 谁决定调的
+
+- 你手打 `/skill-name` → `origin: "user"`。这一条在 `UserPromptSubmit` 里就记下了，
+  因为斜杠调用的 skill **可能被 harness 直接展开、根本不走 Skill 工具**，光靠 `PreToolUse` 会漏。
+  如果随后模型又真的调了一次同名 Skill，那次会被认领（`claimed`）而不重复计数。
+- 模型自己调的 → `origin: "auto"`，列表里打琥珀点。
+- MCP 工具不打点——它们本来就全是模型选的，全标等于没标。
+
+`/model`、`/status` 这类内置命令不算一轮任务（不重置岛）。区分方式是查有没有对应的
+`SKILL.md`（找 `~/.claude/skills/`、`~/.claude/plugins/**/skills/`、项目 `.claude/skills/`），
+而不是维护一份内置命令黑名单。
 
 多个 Claude Code 会话同时开着时，**每个会话写自己的 `sessions/<id>.json`**，每次写完再把自己发布到
 `state.json`。所以岛上永远是最近活跃的那个任务，而且提示词和调用列表必定来自同一个会话。
@@ -55,6 +68,8 @@ cut -d'"' -f16 ~/.claude/skill-monitor/history.jsonl | sort | uniq -c | sort -rn
 
 - 窗口层级在菜单栏之上、全空间跟随、永不抢焦点；透明区域点击直接穿透到下面的窗口
 - 紫色实心 ◆ = skill，青色空心 ◇ = MCP（显示成 `服务器 / 工具名`）
+- **琥珀色小点** = 这个 skill 是模型自己决定调的，你没要求过；折叠态的 `⚡N` 是这类调用的个数
+- 右侧数字是**耗时**（`2.2s` / `340ms`），没拿到耗时时退回显示时间点
 - 退出：展开后点右上角 `×`，或在岛上右键 → 退出
 
 ### 只在 Claude 前台时显示

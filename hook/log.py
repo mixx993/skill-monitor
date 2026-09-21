@@ -4,6 +4,7 @@
 Usage (stdin = hook JSON payload):
     log.py prompt   # UserPromptSubmit -> start a new turn
     log.py tool     # PreToolUse       -> append a call
+    log.py done     # PostToolUse      -> attach the call's duration
     log.py stop     # Stop             -> mark the turn finished
 
 Every session accumulates into its own file under sessions/, and whichever
@@ -45,6 +46,7 @@ SYSTEM_ENVELOPES = (
     "<ci-monitor-event",
     "<local-command-stdout",
     "<command-message",
+    "<command-name",
     "[SYSTEM NOTIFICATION",
     "[Artifact comment sent to Claude]",
 )
@@ -55,6 +57,47 @@ def is_injected(text):
     if head.startswith(SYSTEM_ENVELOPES):
         return True
     return "SYSTEM NOTIFICATION - NOT USER INPUT" in text
+
+
+COMMAND_TAG = re.compile(r"<command-name>\s*/?([A-Za-z0-9:_.-]+)\s*</command-name>")
+BARE_SLASH = re.compile(r"^/([A-Za-z0-9:_.-]+)")
+
+
+def slash_command(text):
+    """The command name in `/name ...` or a <command-name> envelope."""
+    match = COMMAND_TAG.search(text)
+    if match:
+        return match.group(1)
+    match = BARE_SLASH.match(text.lstrip())
+    return match.group(1) if match else None
+
+
+def is_known_skill(name, cwd):
+    """True when a SKILL.md exists for this name, so /model and friends
+    are not mistaken for skills."""
+    base = name.split(":")[-1]
+    candidates = [
+        os.path.expanduser("~/.claude/skills/%s/SKILL.md" % base),
+        os.path.expanduser("~/.claude/skills/synced/%s/SKILL.md" % base),
+    ]
+    if cwd:
+        candidates.append(os.path.join(cwd, ".claude", "skills", base, "SKILL.md"))
+    if any(os.path.exists(c) for c in candidates):
+        return True
+    plugin_glob = os.path.expanduser("~/.claude/plugins/**/skills/%s/SKILL.md" % base)
+    try:
+        return bool(glob.glob(plugin_glob, recursive=True))
+    except Exception:
+        return False
+
+
+def find_row(calls, call):
+    for existing in calls:
+        if (existing.get("kind") == call["kind"]
+                and existing.get("server") == call["server"]
+                and existing.get("name") == call["name"]):
+            return existing
+    return None
 
 
 def display_prompt(text):
@@ -150,20 +193,55 @@ def main():
             state = load_json(path)
 
             if mode == "prompt":
-                if is_injected(event.get("prompt") or ""):
+                raw = event.get("prompt") or ""
+                cwd = event.get("cwd")
+                command = slash_command(raw)
+                invoked = command if command and is_known_skill(command, cwd) else None
+
+                # A <command-name> envelope is normally harness noise, but when
+                # it names a real skill the user did start a turn with it.
+                if invoked is None and is_injected(raw):
                     return
+
                 state = {
                     "session": session_id,
-                    "cwd": event.get("cwd"),
-                    "prompt": display_prompt(event.get("prompt") or ""),
+                    "cwd": cwd,
+                    "prompt": display_prompt(raw),
                     "status": "running",
                     "started": now(),
                     "updated": now(),
                     "calls": [],
                 }
+                if invoked:
+                    # Recorded here because a slash-invoked skill may be expanded
+                    # by the harness and never reach PreToolUse at all.
+                    state["prompt"] = state["prompt"] or "/" + invoked
+                    state["calls"] = [{
+                        "kind": "skill",
+                        "server": None,
+                        "name": invoked,
+                        "count": 1,
+                        "time": now(),
+                        "origin": "user",
+                        "from_prompt": True,
+                    }]
                 save_json(path, state)
                 publish(state)
                 prune_sessions()
+                return
+
+            if mode == "done":
+                call = classify(event)
+                elapsed = event.get("duration_ms")
+                if call is None or not isinstance(elapsed, (int, float)) or not state:
+                    return
+                row = find_row(state.get("calls") or [], call)
+                if row is None:
+                    return
+                row["ms"] = int(elapsed)
+                state["updated"] = now()
+                save_json(path, state)
+                publish(state)
                 return
 
             if mode == "stop":
@@ -191,20 +269,19 @@ def main():
                 }
 
             calls = state.get("calls") or []
-            for existing in calls:
-                same = (
-                    existing.get("kind") == call["kind"]
-                    and existing.get("server") == call["server"]
-                    and existing.get("name") == call["name"]
-                )
-                if same:
-                    existing["count"] = int(existing.get("count", 1)) + 1
-                    existing["time"] = now()
-                    break
-            else:
+            row = find_row(calls, call)
+            if row is None:
                 call["count"] = 1
                 call["time"] = now()
+                call["origin"] = "auto"
                 calls.append(call)
+            elif row.get("from_prompt") and not row.get("claimed"):
+                # The Skill call the user's /command produced — already counted.
+                row["claimed"] = True
+                row["time"] = now()
+            else:
+                row["count"] = int(row.get("count", 1)) + 1
+                row["time"] = now()
 
             state["calls"] = calls[-MAX_CALLS:]
             state["status"] = "running"
