@@ -23,7 +23,7 @@ let demoState = TurnState(
     status: "running",
     started: "04:52:30",
     updated: "04:54:02",
-    cwd: "/Users/mixx/code/skill-monitor",
+    cwd: "/Users/you/code/skill-monitor",
     calls: demoCalls
 )
 

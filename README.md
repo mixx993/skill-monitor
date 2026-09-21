@@ -1,104 +1,131 @@
 # SkillMonitor
 
-一个 macOS 原生悬浮窗，显示**最新一次任务**中 Claude Code 调用了哪些 skill 和 MCP 工具。
+**English** · [中文](README.zh-CN.md)
 
-## 组成
+A Dynamic Island for Claude Code. It hangs under your MacBook's notch and shows
+which skills and MCP tools the current task is using — and, for skills, whether
+you asked for them or the model reached for them on its own.
 
-| 文件 | 作用 |
-|---|---|
-| `hook/log.py` | Claude Code hook：把调用写进 `~/.claude/skill-monitor/state.json` |
-| `app/Island.swift` | 灵动岛视图 + 状态轮询（0.3 秒） |
-| `app/main.swift` | 窗口层：透明、无边框、菜单栏之上、贴刘海 |
-| `tools/preview/main.swift` | 离屏渲染预览图 |
-| `build.sh` | 编译出 `dist/SkillMonitor.app` |
-| `uninstall.sh` | 从 settings.json 摘掉 hook 并退出 app |
+![expanded](docs/island-expanded.png)
 
-## 工作原理
+## Why
 
-三个 hook 写进 `~/.claude/settings.json`：
+Claude Code already prints every skill and MCP invocation, but they scroll past
+in the tool-call stream. There is no per-task summary, and a skill the model
+decided to load on its own looks exactly like one you typed `/name` for. If you
+have a couple of dozen skills installed, you stop noticing either.
 
-- `UserPromptSubmit` → 清空状态，开一轮新任务（同步，确保早于第一个工具调用）
+SkillMonitor answers one question at a glance: *what is this task actually
+reaching for right now, and how much of that did I ask for?*
 
-  ⚠️ 这个事件**不只在你打字时触发**：后台任务完成通知、system-reminder、CI 事件等 harness 往会话里注入的内容也算一次提交。
-  `log.py` 里的 `is_injected()` 把它们挡掉（识别 `<task-notification`、`<system-reminder`、
-  `[SYSTEM NOTIFICATION` 等开头），否则一条后台通知就会把计数清零、并把原始 XML 当提示词显示出来。
-- `PreToolUse`，matcher `Skill|mcp__.*` → 记一条调用（异步，不增加延迟）
-- `PostToolUse`，同样的 matcher → 把该次调用的耗时补上（载荷里直接带了 `duration_ms`，不用自己计时）
-- `Stop` → 把状态标成 done（绿点变灰）
+## Install
 
-### 谁决定调的
-
-- 你手打 `/skill-name` → `origin: "user"`。这一条在 `UserPromptSubmit` 里就记下了，
-  因为斜杠调用的 skill **可能被 harness 直接展开、根本不走 Skill 工具**，光靠 `PreToolUse` 会漏。
-  如果随后模型又真的调了一次同名 Skill，那次会被认领（`claimed`）而不重复计数。
-- 模型自己调的 → `origin: "auto"`，列表里打琥珀点。
-- MCP 工具不打点——它们本来就全是模型选的，全标等于没标。
-
-`/model`、`/status` 这类内置命令不算一轮任务（不重置岛）。区分方式是查有没有对应的
-`SKILL.md`（找 `~/.claude/skills/`、`~/.claude/plugins/**/skills/`、项目 `.claude/skills/`），
-而不是维护一份内置命令黑名单。
-
-多个 Claude Code 会话同时开着时，**每个会话写自己的 `sessions/<id>.json`**，每次写完再把自己发布到
-`state.json`。所以岛上永远是最近活跃的那个任务，而且提示词和调用列表必定来自同一个会话。
-（共用单文件时，A 会话的提示词会配上 B 会话的调用。）会话文件超过 24 小时或 40 个自动清理。
-
-重复调用同一个 skill 会合并成 `×N`，不会刷屏。
-
-## 数据
-
-- `~/.claude/skill-monitor/sessions/<session_id>.json` — 每个会话各自的账本
-- `~/.claude/skill-monitor/state.json` — **最近活跃**的那个会话的副本，岛只读它
-- `~/.claude/skill-monitor/history.jsonl` — 跨会话流水（带 session_id、cwd），超过 2MB 自动轮转
-
-用来统计「哪些 skill 装了但从没用过」：
+Requires macOS 13+, Claude Code, and Xcode or the Command Line Tools
+(`xcode-select --install`) to compile the app.
 
 ```bash
-cut -d'"' -f16 ~/.claude/skill-monitor/history.jsonl | sort | uniq -c | sort -rn
+git clone https://github.com/mixx993/skill-monitor.git
+cd skill-monitor
+./install.sh
 ```
 
-## 界面：灵动岛
+The installer builds the app, registers four hooks in `~/.claude/settings.json`
+(backing up your existing file first), and launches the island. Re-running it is
+safe — it replaces its own hooks and leaves everything else alone.
 
-挂在刘海正下方（无刘海的机器则嵌进菜单栏中间的空位），三个状态之间弹簧过渡：
+Remove it with `./uninstall.sh`.
 
-| 状态 | 样子 | 触发 |
+## What you see
+
+| State | Looks like | When |
 |---|---|---|
-| collapsed | `● 5` 小胶囊 | 空闲。绿点=任务进行中，灰点=已结束 |
-| flash | `docs / guide  04:53:44` | 新调用落地，2.2 秒后自动收回 |
-| expanded | 完整列表 | 鼠标移上去 |
+| collapsed | `● 5 ⚡2` | Idle. Green dot = task running, grey = finished |
+| flash | `docs / guide  2.2s` | A call just landed; collapses after 2.2s |
+| expanded | the full list | Pointer is on the island |
 
-- 窗口层级在菜单栏之上、全空间跟随、永不抢焦点；透明区域点击直接穿透到下面的窗口
-- 紫色实心 ◆ = skill，青色空心 ◇ = MCP（显示成 `服务器 / 工具名`）
-- **琥珀色小点** = 这个 skill 是模型自己决定调的，你没要求过；折叠态的 `⚡N` 是这类调用的个数
-- 右侧数字是**耗时**（`2.2s` / `340ms`），没拿到耗时时退回显示时间点
-- 退出：展开后点右上角 `×`，或在岛上右键 → 退出
+<img src="docs/island-collapsed.png" width="420">
 
-### 只在 Claude 前台时显示
+- Filled purple ◆ is a skill, hollow teal ◇ is an MCP tool (shown as `server / tool`)
+- An **amber pip** means the model reached for that skill on its own. The `⚡N`
+  on the collapsed pill counts those.
+- The right-hand figure is the call's **duration**, falling back to a timestamp
+  when it isn't known yet.
+- The island only appears while Claude is frontmost, so it is not in your way
+  in a browser.
 
-切到 Chrome、微信等其他 app 时岛会淡出并 `orderOut`（完全离开屏幕，不只是透明），切回来再淡入。
-靠 `NSWorkspace.didActivateApplicationNotification` 监听前台 app 切换。
+## How it works
 
-白名单在 `~/.claude/skill-monitor/config.json`，首次启动自动生成：
+Four hooks feed one state file that the app polls:
 
-```json
-{
-  "showWhenFrontmost": ["com.anthropic.claudefordesktop"]
-}
+| Hook | Matcher | Does |
+|---|---|---|
+| `UserPromptSubmit` | — | Starts a new task (sync, so it lands before the first tool call) |
+| `PreToolUse` | `Skill\|mcp__.*` | Appends a call (async, no added latency) |
+| `PostToolUse` | `Skill\|mcp__.*` | Attaches the call's duration |
+| `Stop` | — | Marks the task finished |
+
+```
+~/.claude/skill-monitor/
+├── sessions/<session_id>.json   per-session ledger
+├── state.json                   a copy of whichever session was touched last
+├── config.json                  which apps the island shows for
+└── history.jsonl                append-only log across all sessions
 ```
 
-在终端里跑 CLI 版 Claude Code 的话，把终端的 bundle id 加进去（`com.apple.Terminal`、
-`com.googlecode.iterm2`、`com.mitchellh.ghostty` 等），改完重启 app。
-
-预览图在 `docs/`，由 `tools/preview/main.swift` 离屏渲染生成（不需要截屏权限）：
+Find skills you installed and never use:
 
 ```bash
-swiftc -O -framework AppKit -framework SwiftUI -o dist/preview-tool app/Island.swift tools/preview/main.swift
+jq -r 'select(.kind=="skill") | .name' ~/.claude/skill-monitor/history.jsonl \
+  | sort | uniq -c | sort -rn
+```
+
+## Notes from building it
+
+Four things were not obvious, and are the reason the code looks the way it does.
+
+**`UserPromptSubmit` is not "the user pressed enter".** It also fires for things
+the harness injects — background task completions, system reminders, CI events.
+Without filtering, a single background task resets your task and renders raw XML
+as the prompt. See `is_injected()`.
+
+**One state file is not enough.** With several sessions open, a prompt submitted
+in session A takes ownership of tool calls made in session B, so the header and
+the list describe different tasks. Each session keeps its own ledger and
+republishes itself; the island shows whichever was touched last.
+
+**SwiftUI's `.onHover` never fires here.** The app is an `.accessory` app that
+never activates, and `.onHover` only works for the active app. Hovering uses an
+`NSTrackingArea` registered `.activeAlways` instead.
+
+**Origin has to be decided at the prompt, not at the tool call.** A skill invoked
+as `/name` may be expanded by the harness and never reach `PreToolUse`, so the
+slash command is recorded the moment the prompt arrives. If the model then calls
+that same skill, the row is *claimed* rather than counted twice. Built-ins like
+`/model` are told apart by looking for a matching `SKILL.md`, not by keeping a
+list of built-in commands.
+
+## Developing
+
+`tools/preview/` renders the view offscreen to PNG over a mock notched desktop,
+so the design can be iterated without screen-recording permission or a running
+Claude session:
+
+```bash
+swiftc -O -framework AppKit -framework SwiftUI \
+  -o dist/preview-tool app/Island.swift tools/preview/main.swift
 ./dist/preview-tool docs
 ```
 
-## 开机自启
+| File | Role |
+|---|---|
+| `hook/log.py` | Hook adapter — the only Claude-Code-specific part |
+| `app/Island.swift` | The island view and state polling |
+| `app/main.swift` | Window layer: transparent, above the menu bar, notch-aware |
+| `tools/preview/` | Offscreen renderer for design work |
 
-系统设置 → 通用 → 登录项 → `+` → 选 `dist/SkillMonitor.app`
+The app knows nothing about Claude Code — it renders one JSON file. Pointing it
+at another agent means writing another adapter, not touching the app.
 
-## 注意
+## License
 
-hook 里写的是本目录的绝对路径。**移动这个文件夹后要改 `~/.claude/settings.json` 里的三条命令**，或者重跑安装。
+MIT

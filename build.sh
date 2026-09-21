@@ -8,8 +8,13 @@ APP="$ROOT/dist/SkillMonitor.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 
+case "$(uname -m)" in
+  arm64) TARGET="arm64-apple-macos13.0" ;;
+  *)     TARGET="x86_64-apple-macos13.0" ;;
+esac
+
 swiftc -O \
-  -target arm64-apple-macos13.0 \
+  -target "$TARGET" \
   -framework AppKit -framework SwiftUI \
   -o "$APP/Contents/MacOS/SkillMonitor" \
   "$ROOT/app/Island.swift" "$ROOT/app/main.swift"
