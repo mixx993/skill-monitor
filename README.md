@@ -25,11 +25,16 @@
 - `PreToolUse`，matcher `Skill|mcp__.*` → 记一条调用（异步，不增加延迟）
 - `Stop` → 把状态标成 done（绿点变灰）
 
+多个 Claude Code 会话同时开着时，**每个会话写自己的 `sessions/<id>.json`**，每次写完再把自己发布到
+`state.json`。所以岛上永远是最近活跃的那个任务，而且提示词和调用列表必定来自同一个会话。
+（共用单文件时，A 会话的提示词会配上 B 会话的调用。）会话文件超过 24 小时或 40 个自动清理。
+
 重复调用同一个 skill 会合并成 `×N`，不会刷屏。
 
 ## 数据
 
-- `~/.claude/skill-monitor/state.json` — 当前这一轮，面板读它
+- `~/.claude/skill-monitor/sessions/<session_id>.json` — 每个会话各自的账本
+- `~/.claude/skill-monitor/state.json` — **最近活跃**的那个会话的副本，岛只读它
 - `~/.claude/skill-monitor/history.jsonl` — 跨会话流水（带 session_id、cwd），超过 2MB 自动轮转
 
 用来统计「哪些 skill 装了但从没用过」：
