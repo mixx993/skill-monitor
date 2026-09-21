@@ -52,6 +52,22 @@ cut -d'"' -f16 ~/.claude/skill-monitor/history.jsonl | sort | uniq -c | sort -rn
 - 紫色实心 ◆ = skill，青色空心 ◇ = MCP（显示成 `服务器 / 工具名`）
 - 退出：展开后点右上角 `×`，或在岛上右键 → 退出
 
+### 只在 Claude 前台时显示
+
+切到 Chrome、微信等其他 app 时岛会淡出并 `orderOut`（完全离开屏幕，不只是透明），切回来再淡入。
+靠 `NSWorkspace.didActivateApplicationNotification` 监听前台 app 切换。
+
+白名单在 `~/.claude/skill-monitor/config.json`，首次启动自动生成：
+
+```json
+{
+  "showWhenFrontmost": ["com.anthropic.claudefordesktop"]
+}
+```
+
+在终端里跑 CLI 版 Claude Code 的话，把终端的 bundle id 加进去（`com.apple.Terminal`、
+`com.googlecode.iterm2`、`com.mitchellh.ghostty` 等），改完重启 app。
+
 预览图在 `docs/`，由 `tools/preview/main.swift` 离屏渲染生成（不需要截屏权限）：
 
 ```bash
