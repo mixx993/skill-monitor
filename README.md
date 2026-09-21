@@ -1,5 +1,7 @@
 # SkillMonitor
 
+[![CI](https://github.com/mixx993/skill-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/mixx993/skill-monitor/actions/workflows/ci.yml)
+
 **English** · [中文](README.zh-CN.md)
 
 A Dynamic Island for Claude Code. It hangs under your MacBook's notch and shows
@@ -20,8 +22,8 @@ reaching for right now, and how much of that did I ask for?*
 
 ## Install
 
-Requires macOS 13+, Claude Code, and Xcode or the Command Line Tools
-(`xcode-select --install`) to compile the app.
+macOS 13+ and Claude Code. The hooks come from this repository either way, so
+start by cloning it.
 
 ```bash
 git clone https://github.com/mixx993/skill-monitor.git
@@ -29,11 +31,27 @@ cd skill-monitor
 ./install.sh
 ```
 
-The installer builds the app, registers four hooks in `~/.claude/settings.json`
+`install.sh` compiles the app, registers four hooks in `~/.claude/settings.json`
 (backing up your existing file first), and launches the island. Re-running it is
 safe — it replaces its own hooks and leaves everything else alone.
 
-Remove it with `./uninstall.sh`.
+Compiling needs Xcode or the Command Line Tools (`xcode-select --install`).
+**Without them**, drop a [release build](../../releases/latest) in place first and
+the installer will use it:
+
+```bash
+mkdir -p dist
+unzip ~/Downloads/SkillMonitor-*.zip -d dist
+./install.sh
+```
+
+Release builds are universal (arm64 + x86_64) but **ad-hoc signed, not notarized**
+— there is no Apple Developer certificate behind this project. macOS quarantines
+them on download, so `install.sh` clears that flag for you (`xattr -dr
+com.apple.quarantine`). If you would rather not have a binary from the internet
+run on your machine, compile from source: that path is never quarantined.
+
+Remove everything with `./uninstall.sh`.
 
 ## What you see
 
@@ -122,9 +140,21 @@ swiftc -O -framework AppKit -framework SwiftUI \
 | `app/Island.swift` | The island view and state polling |
 | `app/main.swift` | Window layer: transparent, above the menu bar, notch-aware |
 | `tools/preview/` | Offscreen renderer for design work |
+| `tests/test_hook.py` | Behavioural tests for the hook |
 
 The app knows nothing about Claude Code — it renders one JSON file. Pointing it
 at another agent means writing another adapter, not touching the app.
+
+## Tests
+
+```bash
+python3 tests/test_hook.py
+```
+
+Runs `hook/log.py` as a subprocess against a throwaway `HOME`, so it cannot
+touch a real `~/.claude`. Covers dedup, origin attribution, the claim rule,
+duration capture, injected-prompt filtering and session isolation. CI runs
+these plus a universal build on every push.
 
 ## License
 

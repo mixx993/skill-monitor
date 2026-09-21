@@ -14,13 +14,23 @@ if [ -z "$PY" ]; then
     exit 1
 fi
 
-if ! command -v swiftc >/dev/null 2>&1; then
-    echo "error: swiftc not found — building the app needs Xcode or the Command Line Tools" >&2
-    exit 1
-fi
+APP="$ROOT/dist/SkillMonitor.app"
 
-echo "==> building"
-"$ROOT/build.sh"
+if [ "${SKIP_BUILD:-0}" = "1" ] || ! command -v swiftc >/dev/null 2>&1; then
+    if [ ! -d "$APP" ]; then
+        echo "error: swiftc not found and no prebuilt app at dist/SkillMonitor.app" >&2
+        echo "       either install the Xcode Command Line Tools:" >&2
+        echo "         xcode-select --install" >&2
+        echo "       or drop a release build in place:" >&2
+        echo "         mkdir -p dist && unzip ~/Downloads/SkillMonitor-*.zip -d dist" >&2
+        exit 1
+    fi
+    echo "==> using existing dist/SkillMonitor.app (skipping build)"
+    xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+else
+    echo "==> building"
+    "$ROOT/build.sh"
+fi
 
 echo "==> registering hooks"
 "$PY" - "$ROOT" "$PY" <<'PYEOF'
@@ -76,7 +86,7 @@ print("    4 hooks registered in %s" % path)
 PYEOF
 
 echo "==> launching"
-open "$ROOT/dist/SkillMonitor.app"
+open "$APP"
 
 cat <<MSG
 

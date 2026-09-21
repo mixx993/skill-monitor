@@ -8,16 +8,26 @@ APP="$ROOT/dist/SkillMonitor.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 
-case "$(uname -m)" in
-  arm64) TARGET="arm64-apple-macos13.0" ;;
-  *)     TARGET="x86_64-apple-macos13.0" ;;
-esac
+BIN="$APP/Contents/MacOS/SkillMonitor"
+SOURCES=("$ROOT/app/Island.swift" "$ROOT/app/main.swift")
 
-swiftc -O \
-  -target "$TARGET" \
-  -framework AppKit -framework SwiftUI \
-  -o "$APP/Contents/MacOS/SkillMonitor" \
-  "$ROOT/app/Island.swift" "$ROOT/app/main.swift"
+compile() { # <target> <output>
+  swiftc -O -target "$1" -framework AppKit -framework SwiftUI -o "$2" "${SOURCES[@]}"
+}
+
+if [ "${UNIVERSAL:-0}" = "1" ]; then
+  # Release builds run on one runner but have to start on both architectures.
+  TMP="$(mktemp -d)"
+  compile arm64-apple-macos13.0  "$TMP/arm64"
+  compile x86_64-apple-macos13.0 "$TMP/x86_64"
+  lipo -create "$TMP/arm64" "$TMP/x86_64" -output "$BIN"
+  rm -rf "$TMP"
+else
+  case "$(uname -m)" in
+    arm64) compile arm64-apple-macos13.0  "$BIN" ;;
+    *)     compile x86_64-apple-macos13.0 "$BIN" ;;
+  esac
+fi
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

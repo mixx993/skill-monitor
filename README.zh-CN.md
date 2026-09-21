@@ -1,5 +1,7 @@
 # SkillMonitor
 
+[![CI](https://github.com/mixx993/skill-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/mixx993/skill-monitor/actions/workflows/ci.yml)
+
 [English](README.md) · **中文**
 
 一个给 Claude Code 用的灵动岛。挂在刘海下方，显示当前任务用了哪些 skill 和 MCP——
@@ -15,7 +17,7 @@ Claude Code 本来就会把每次 skill 和 MCP 调用打出来，但它们淹�
 
 ## 安装
 
-需要 macOS 13+、Claude Code，以及 Xcode 或命令行工具（`xcode-select --install`）用来编译 app。
+需要 macOS 13+ 和 Claude Code。hook 必须从这个仓库来，所以无论哪条路都先 clone。
 
 ```bash
 git clone https://github.com/mixx993/skill-monitor.git
@@ -23,8 +25,21 @@ cd skill-monitor
 ./install.sh
 ```
 
-安装脚本会编译 app、往 `~/.claude/settings.json` 里注册 4 个 hook（先备份你原有的）、然后启动岛。
+`install.sh` 会编译 app、往 `~/.claude/settings.json` 里注册 4 个 hook（先备份你原有的）、然后启动岛。
 重复跑是安全的——只替换自己的 hook，不动其他。
+
+编译需要 Xcode 或命令行工具（`xcode-select --install`）。**没装的话**，先把
+[预编译包](../../releases/latest)放进去，安装脚本会直接用它：
+
+```bash
+mkdir -p dist
+unzip ~/Downloads/SkillMonitor-*.zip -d dist
+./install.sh
+```
+
+预编译包是通用二进制（arm64 + x86_64），但**只做了 ad-hoc 签名，没有公证**——这个项目背后
+没有 Apple 开发者证书。macOS 会给下载来的包打隔离标记，`install.sh` 会帮你清掉
+（`xattr -dr com.apple.quarantine`）。不放心从网上下二进制的话，就从源码编译——那条路不会被隔离。
 
 卸载：`./uninstall.sh`
 
@@ -36,6 +51,7 @@ cd skill-monitor
 | `app/Island.swift` | 灵动岛视图 + 状态轮询（0.3 秒） |
 | `app/main.swift` | 窗口层：透明、无边框、菜单栏之上、贴刘海 |
 | `tools/preview/main.swift` | 离屏渲染预览图 |
+| `tests/test_hook.py` | hook 的行为测试 |
 | `install.sh` | 编译 + 注册 hook + 启动（一键） |
 | `build.sh` | 只编译出 `dist/SkillMonitor.app` |
 | `uninstall.sh` | 从 settings.json 摘掉 hook 并退出 app |
@@ -125,6 +141,15 @@ swiftc -O -framework AppKit -framework SwiftUI -o dist/preview-tool app/Island.s
 ## 开机自启
 
 系统设置 → 通用 → 登录项 → `+` → 选 `dist/SkillMonitor.app`
+
+## 测试
+
+```bash
+python3 tests/test_hook.py
+```
+
+用一个临时 `HOME` 跑 `hook/log.py` 子进程，碰不到真实的 `~/.claude`。覆盖去重、origin 归属、
+认领规则、耗时捕获、注入提示词过滤、会话隔离。CI 每次推送都会跑这些 + 通用二进制编译。
 
 ## 注意
 

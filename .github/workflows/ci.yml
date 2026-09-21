@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Hook behaviour tests
+        run: python3 tests/test_hook.py
+
+      - name: Build (universal)
+        run: UNIVERSAL=1 ./build.sh
+
+      - name: Check the bundle
+        run: |
+          BIN=dist/SkillMonitor.app/Contents/MacOS/SkillMonitor
+          lipo -info "$BIN"
+          lipo -info "$BIN" | grep -q arm64
+          lipo -info "$BIN" | grep -q x86_64
+          plutil -lint dist/SkillMonitor.app/Contents/Info.plist
+          codesign --verify --verbose dist/SkillMonitor.app
+
+      - name: Build the offscreen renderer
+        run: |
+          swiftc -O -framework AppKit -framework SwiftUI \
+            -o /tmp/preview-tool app/Island.swift tools/preview/main.swift
+          /tmp/preview-tool "$(mktemp -d)"
+
+      - name: Shell scripts parse
+        run: for f in install.sh uninstall.sh build.sh; do bash -n "$f"; done

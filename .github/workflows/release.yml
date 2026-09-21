@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to release (e.g. v0.1.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tests
+        run: python3 tests/test_hook.py
+
+      - name: Build (universal)
+        run: UNIVERSAL=1 ./build.sh
+
+      - name: Package
+        id: package
+        run: |
+          TAG="${GITHUB_REF_NAME:-${{ inputs.tag }}}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          ditto -c -k --sequesterRsrc --keepParent \
+            dist/SkillMonitor.app "SkillMonitor-$TAG.zip"
+          shasum -a 256 "SkillMonitor-$TAG.zip" | tee checksum.txt
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.package.outputs.tag }}
+        run: |
+          {
+            echo "## Install"
+            echo
+            echo '```bash'
+            echo "curl -L -o SkillMonitor.zip https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/SkillMonitor-${TAG}.zip"
+            echo 'unzip SkillMonitor.zip'
+            echo 'xattr -dr com.apple.quarantine SkillMonitor.app   # unsigned build, see below'
+            echo 'open SkillMonitor.app'
+            echo '```'
+            echo
+            echo "The app renders \`~/.claude/skill-monitor/state.json\`. To have"
+            echo "Claude Code write it, you still need the hooks:"
+            echo
+            echo '```bash'
+            echo "git clone https://github.com/${GITHUB_REPOSITORY}.git && cd skill-monitor && ./install.sh"
+            echo '```'
+            echo
+            echo "## Why the \`xattr\` line"
+            echo
+            echo "This build is ad-hoc signed, not signed with an Apple Developer"
+            echo "certificate and not notarized, so Gatekeeper quarantines it on"
+            echo "download. The command above clears that flag. If you would rather"
+            echo "not run it, build from source instead — \`./install.sh\` compiles"
+            echo "locally and is never quarantined."
+            echo
+            echo "Universal (arm64 + x86_64), macOS 13+."
+            echo
+            echo '```'
+            cat checksum.txt
+            echo '```'
+          } > notes.md
+
+          gh release create "$TAG" "SkillMonitor-$TAG.zip" \
+            --title "SkillMonitor $TAG" \
+            --notes-file notes.md \
+            --generate-notes
