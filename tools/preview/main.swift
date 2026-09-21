@@ -4,15 +4,22 @@ import AppKit
 import SwiftUI
 
 let demoCalls: [Call] = [
-    Call(kind: "skill", server: nil, name: "update-config", count: 2, time: "04:52:41"),
-    Call(kind: "skill", server: nil, name: "hyperframes-core", count: 1, time: "04:52:58"),
-    Call(kind: "mcp", server: "blender", name: "get_scene_info", count: 1, time: "04:53:10"),
-    Call(kind: "mcp", server: "docs", name: "guide", count: 3, time: "04:53:44"),
-    Call(kind: "mcp", server: "Claude_Browser", name: "tabs_context", count: 1, time: "04:54:02"),
+    Call(kind: "skill", server: nil, name: "hyperframes", count: 1, time: "04:52:30",
+         origin: "user", ms: 120),
+    Call(kind: "skill", server: nil, name: "hyperframes-core", count: 1, time: "04:52:58",
+         origin: "auto", ms: 95),
+    Call(kind: "skill", server: nil, name: "mixx-video-craft", count: 1, time: "04:53:04",
+         origin: "auto", ms: 88),
+    Call(kind: "mcp", server: "blender", name: "get_scene_info", count: 1, time: "04:53:10",
+         origin: "auto", ms: 340),
+    Call(kind: "mcp", server: "docs", name: "guide", count: 3, time: "04:53:44",
+         origin: "auto", ms: 2180),
+    Call(kind: "mcp", server: "Claude_Browser", name: "tabs_context", count: 1, time: "04:54:02",
+         origin: "auto", ms: 610),
 ]
 
 let demoState = TurnState(
-    prompt: "把悬浮窗改成灵动岛式胶囊",
+    prompt: "/hyperframes 做个 15 秒的产品短片",
     status: "running",
     started: "04:52:30",
     updated: "04:54:02",
@@ -89,13 +96,13 @@ app.setActivationPolicy(.prohibited)
 let out = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "."
 
 render(Mock(store: Store(preview: demoState, mode: .collapsed, flash: nil),
-            caption: "collapsed — 空闲"),
+            caption: "collapsed — 5 次调用，其中 2 个 skill 是模型自己决定的"),
        width: 700, height: 330, to: "\(out)/island-collapsed.png")
 
-render(Mock(store: Store(preview: demoState, mode: .flash, flash: demoCalls[3]),
-            caption: "flash — 新调用落地，2.2s 后收回"),
+render(Mock(store: Store(preview: demoState, mode: .flash, flash: demoCalls[2]),
+            caption: "flash — 模型自己触发了 mixx-video-craft"),
        width: 700, height: 330, to: "\(out)/island-flash.png")
 
 render(Mock(store: Store(preview: demoState, mode: .expanded, flash: nil),
-            caption: "expanded — 鼠标悬停"),
+            caption: "expanded — 琥珀点 = 你没要求，模型自己调的"),
        width: 700, height: 330, to: "\(out)/island-expanded.png")

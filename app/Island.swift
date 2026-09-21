@@ -9,6 +9,20 @@ struct Call: Decodable, Identifiable, Equatable {
     let name: String
     let count: Int
     let time: String
+    /// "auto" = the model reached for it; "user" = you typed /name.
+    /// nil on records written before origin tracking existed.
+    let origin: String?
+    /// Wall time of the call in milliseconds, when known.
+    let ms: Int?
+
+    /// Only skills carry this signal — MCP tools are always model-chosen.
+    var isAutoSkill: Bool { isSkill && origin == "auto" }
+
+    var duration: String? {
+        guard let ms = ms else { return nil }
+        if ms < 1000 { return "\(ms)ms" }
+        return String(format: "%.1fs", Double(ms) / 1000)
+    }
 
     var id: String { "\(kind)|\(server ?? "-")|\(name)" }
     var isSkill: Bool { kind == "skill" }
@@ -73,6 +87,8 @@ final class Store: ObservableObject {
 
     var calls: [Call] { state.calls ?? [] }
     var isRunning: Bool { state.status == "running" }
+    /// How many skills the model reached for without being asked.
+    var autoSkillCount: Int { calls.filter { $0.isAutoSkill }.count }
 
     var project: String? {
         guard let cwd = state.cwd, !cwd.isEmpty else { return nil }
@@ -185,6 +201,7 @@ struct HoverTracker: NSViewRepresentable {
 private let skillColor = Color(red: 0.64, green: 0.51, blue: 0.99)
 private let mcpColor = Color(red: 0.30, green: 0.80, blue: 0.76)
 private let liveColor = Color(red: 0.32, green: 0.86, blue: 0.47)
+private let autoColor = Color(red: 0.98, green: 0.72, blue: 0.25)
 
 struct Glyph: View {
     let call: Call
@@ -201,7 +218,10 @@ struct CallRow: View {
     let call: Call
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(call.isAutoSkill ? autoColor : Color.clear)
+                .frame(width: 3.5, height: 3.5)
             Glyph(call: call)
             call.label
                 .font(.system(size: 11.5))
@@ -213,9 +233,10 @@ struct CallRow: View {
                     .font(.system(size: 9.5, weight: .semibold, design: .rounded))
                     .foregroundColor(.white.opacity(0.45))
             }
-            Text(call.time)
+            Text(call.duration ?? call.time)
                 .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(.white.opacity(0.3))
+                .foregroundColor(.white.opacity(0.32))
+                .frame(width: 38, alignment: .trailing)
         }
         .padding(.vertical, 2.5)
     }
@@ -296,6 +317,16 @@ struct IslandView: View {
                     .foregroundColor(.white.opacity(0.88))
                     .monospacedDigit()
             }
+            if store.autoSkillCount > 0 {
+                HStack(spacing: 1.5) {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 7, weight: .bold))
+                    Text("\(store.autoSkillCount)")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                }
+                .foregroundColor(autoColor)
+            }
         }
         .padding(.horizontal, store.calls.isEmpty ? 8 : 9)
         .frame(height: 21)
@@ -343,6 +374,14 @@ struct IslandView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 6)
+                if store.autoSkillCount > 0 {
+                    HStack(spacing: 2) {
+                        Image(systemName: "bolt.fill").font(.system(size: 7, weight: .bold))
+                        Text("\(store.autoSkillCount) 自动")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .foregroundColor(autoColor)
+                }
                 Text("\(store.calls.count)")
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundColor(.white.opacity(0.45))
