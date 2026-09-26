@@ -31,7 +31,7 @@ cd skill-monitor
 ./install.sh
 ```
 
-`install.sh` compiles the app, registers four hooks in `~/.claude/settings.json`
+`install.sh` compiles the app, registers five hooks in `~/.claude/settings.json`
 (backing up your existing file first), and launches the island. Re-running it is
 safe — it replaces its own hooks and leaves everything else alone.
 
@@ -68,12 +68,16 @@ Remove everything with `./uninstall.sh`.
   on the collapsed pill counts those.
 - The right-hand figure is the call's **duration**, falling back to a timestamp
   when it isn't known yet.
+- Under the calls, **the instruction files in effect for the session**: global,
+  project and nested `CLAUDE.md` (including files pulled in with `@import`),
+  auto-memory, and settings — each with a short content fingerprint. Click the
+  summary line to expand it.
 - The island only appears while Claude is frontmost, so it is not in your way
   in a browser.
 
 ## How it works
 
-Four hooks feed one state file that the app polls:
+Five hooks feed one state file that the app polls:
 
 | Hook | Matcher | Does |
 |---|---|---|
@@ -81,6 +85,7 @@ Four hooks feed one state file that the app polls:
 | `PreToolUse` | `Skill\|mcp__.*` | Appends a call (async, no added latency) |
 | `PostToolUse` | `Skill\|mcp__.*` | Attaches the call's duration |
 | `Stop` | — | Marks the task finished |
+| `InstructionsLoaded` | — | Records a `CLAUDE.md` loaded mid-session |
 
 ```
 ~/.claude/skill-monitor/
@@ -96,6 +101,28 @@ Find skills you installed and never use:
 jq -r 'select(.kind=="skill") | .name' ~/.claude/skill-monitor/history.jsonl \
   | sort | uniq -c | sort -rn
 ```
+
+## Instruction files
+
+Skills and MCP tools are only part of what shapes a result. `CLAUDE.md`, memory
+and settings are read on every turn, never appear as a tool call, and are the
+most common reason the same request behaves differently on another machine —
+silently, with no error.
+
+At the start of each task the hook lists the files Claude Code would load for
+that directory: `~/.claude/CLAUDE.md`, every `CLAUDE.md` / `.claude/CLAUDE.md` /
+`CLAUDE.local.md` from the filesystem root down to the working directory, the
+session's `memory/MEMORY.md`, and the user / project / local `settings.json`.
+Files that only load later — a nested `CLAUDE.md` read when Claude opens a file
+in that subdirectory, or one pulled in with `@AGENTS.md` — arrive through the
+`InstructionsLoaded` event and stay listed for the rest of the session.
+
+Each file gets a 7-character SHA-256 fingerprint. Comparing two machines means
+comparing those codes: same code, same file.
+
+What this cannot show: Claude Code's own built-in system prompt, which is not a
+file and changes with the Claude Code version; and how much any one file
+actually changed the outcome.
 
 ## Notes from building it
 
@@ -153,7 +180,8 @@ python3 tests/test_hook.py
 
 Runs `hook/log.py` as a subprocess against a throwaway `HOME`, so it cannot
 touch a real `~/.claude`. Covers dedup, origin attribution, the claim rule,
-duration capture, injected-prompt filtering and session isolation. CI runs
+duration capture, injected-prompt filtering, session isolation, and
+instruction-file discovery and fingerprinting. CI runs
 these plus a universal build on every push.
 
 ## License

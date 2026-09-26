@@ -25,7 +25,7 @@ cd skill-monitor
 ./install.sh
 ```
 
-`install.sh` 会编译 app、往 `~/.claude/settings.json` 里注册 4 个 hook（先备份你原有的）、然后启动岛。
+`install.sh` 会编译 app、往 `~/.claude/settings.json` 里注册 5 个 hook（先备份你原有的）、然后启动岛。
 重复跑是安全的——只替换自己的 hook，不动其他。
 
 编译需要 Xcode 或命令行工具（`xcode-select --install`）。**没装的话**，先把
@@ -68,6 +68,24 @@ unzip ~/Downloads/SkillMonitor-*.zip -d dist
 - `PreToolUse`，matcher `Skill|mcp__.*` → 记一条调用（异步，不增加延迟）
 - `PostToolUse`，同样的 matcher → 把该次调用的耗时补上（载荷里直接带了 `duration_ms`，不用自己计时）
 - `Stop` → 把状态标成 done（绿点变灰）
+- `InstructionsLoaded` → 会话中途加载的 `CLAUDE.md`（子目录、`@` 引用）补进指令列表
+
+### 指令文件
+
+skill 和 MCP 只是影响结果的一部分。`CLAUDE.md`、记忆、设置每一轮都会被读进去，但永远不会以工具调用的形式出现。
+同一个请求换台电脑表现不一样，最常见的原因就在这里，而且不会报任何错。
+
+每个任务开始时，hook 按 Claude Code 的加载规则列出该目录下生效的文件：`~/.claude/CLAUDE.md`、
+从根目录一路到工作目录的每一层 `CLAUDE.md` / `.claude/CLAUDE.md` / `CLAUDE.local.md`、
+本会话的 `memory/MEMORY.md`、用户级 / 项目级 / 本地的 `settings.json`。
+
+有些文件是中途才加载的：Claude 打开某个子目录里的文件时，那一层的 `CLAUDE.md` 才会被读进来；
+或者 `CLAUDE.md` 里用 `@AGENTS.md` 引用了别的文件。这些通过 `InstructionsLoaded` 事件补进来，
+并在整个会话里保留。
+
+每个文件有一个 7 位的 SHA-256 指纹。比较两台电脑，就是比较这些短码：短码相同，文件就相同。
+
+看不到的：Claude Code 自己的内置系统提示（不是文件，随版本变化）；以及某个文件对结果的实际影响有多大。
 
 ### 谁决定调的
 
@@ -113,6 +131,8 @@ cut -d'"' -f16 ~/.claude/skill-monitor/history.jsonl | sort | uniq -c | sort -rn
 - 紫色实心 ◆ = skill，青色空心 ◇ = MCP（显示成 `服务器 / 工具名`）
 - **琥珀色小点** = 这个 skill 是模型自己决定调的，你没要求过；折叠态的 `⚡N` 是这类调用的个数
 - 右侧数字是**耗时**（`2.2s` / `340ms`），没拿到耗时时退回显示时间点
+- 调用列表下方是**本会话生效的指令文件**：全局、项目、子目录的 `CLAUDE.md`（包括用 `@` 引用进来的文件）、
+  自动记忆、设置文件，每个带一个内容指纹。点摘要那一行展开明细。
 - 退出：展开后点右上角 `×`，或在岛上右键 → 退出
 
 ### 只在 Claude 前台时显示

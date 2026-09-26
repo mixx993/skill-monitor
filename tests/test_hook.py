@@ -51,6 +51,12 @@ def check(label, got, want):
         failures.append(label)
 
 
+def write(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write(text)
+
+
 def make_skill(name):
     d = os.path.join(home, ".claude", "skills", name)
     os.makedirs(d, exist_ok=True)
@@ -130,6 +136,56 @@ def main():
         print("stop marks the task finished")
         fire("stop", {"session_id": "B"})
         check("status done", state().get("status"), "done")
+
+        print("instruction files are found, fingerprinted and survive turns")
+        claude_dir = os.path.join(home, ".claude")
+        write(os.path.join(claude_dir, "CLAUDE.md"), "global rules")
+        project = os.path.join(home, "work", "proj")
+        write(os.path.join(project, "CLAUDE.md"), "project rules")
+        transcript_dir = os.path.join(claude_dir, "projects", "-work-proj")
+        write(os.path.join(transcript_dir, "memory", "MEMORY.md"),
+              "- [a](a.md) — one\n- [b](b.md) — two\n- [c](c.md) — three\n")
+        write(os.path.join(claude_dir, "settings.json"), json.dumps({"hooks": {
+            "PreToolUse": [{"hooks": [{"type": "command", "command": "x"},
+                                      {"type": "command", "command": "y"}]}],
+            "Stop": [{"hooks": [{"type": "command", "command": "z"}]}],
+        }}))
+        transcript = os.path.join(transcript_dir, "C.jsonl")
+
+        fire("prompt", {"session_id": "C", "cwd": project,
+                        "transcript_path": transcript, "prompt": "go"})
+        kinds = sorted((e["kind"], e["scope"]) for e in state()["instructions"])
+        check("global, project, memory and settings found", kinds,
+              [("claude_md", "Project"), ("claude_md", "User"),
+               ("memory", "AutoMem"), ("settings", "User")])
+        memory = [e for e in state()["instructions"] if e["kind"] == "memory"][0]
+        check("memory entries counted", memory["count"], 3)
+        check("hooks counted across settings", state()["hooks"], 3)
+
+        before = {e["path"]: e["hash"] for e in state()["instructions"]}
+        write(os.path.join(project, "CLAUDE.md"), "project rules, edited")
+        fire("prompt", {"session_id": "C", "cwd": project,
+                        "transcript_path": transcript, "prompt": "again"})
+        after = {e["path"]: e["hash"] for e in state()["instructions"]}
+        changed = sorted(os.path.basename(os.path.dirname(p))
+                         for p in after if after[p] != before.get(p))
+        check("an edit changes exactly that file's fingerprint", changed, ["proj"])
+
+        print("a CLAUDE.md loaded mid-session is kept, and outlives the turn")
+        nested = os.path.join(project, "sub", "CLAUDE.md")
+        write(nested, "nested rules")
+        fire("instr", {"session_id": "C", "cwd": project, "file_path": nested,
+                       "memory_type": "Project", "load_reason": "nested_traversal",
+                       "transcript_path": transcript})
+        reasons = {e["path"]: e["reason"] for e in state()["instructions"]}
+        check("nested file recorded with its load reason",
+              reasons.get(nested), "nested_traversal")
+        fire("prompt", {"session_id": "C", "cwd": project,
+                        "transcript_path": transcript, "prompt": "next turn"})
+        check("still listed after the next prompt",
+              nested in {e["path"] for e in state()["instructions"]}, True)
+        check("calls were reset but instructions were not",
+              (rows(), len(state()["instructions"])), ([], 5))
     finally:
         shutil.rmtree(home, ignore_errors=True)
 

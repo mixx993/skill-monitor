@@ -79,10 +79,12 @@ hooks.setdefault("PostToolUse", []).append(
      "hooks": [{"type": "command", "command": cmd + " done", "async": True}]})
 hooks.setdefault("Stop", []).append(
     {"hooks": [{"type": "command", "command": cmd + " stop", "async": True}]})
+hooks.setdefault("InstructionsLoaded", []).append(
+    {"hooks": [{"type": "command", "command": cmd + " instr", "async": True}]})
 
 with open(path, "w") as fh:
     json.dump(settings, fh, indent=2, ensure_ascii=False)
-print("    4 hooks registered in %s" % path)
+print("    5 hooks registered in %s" % path)
 PYEOF
 
 echo "==> launching"

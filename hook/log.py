@@ -6,6 +6,7 @@ Usage (stdin = hook JSON payload):
     log.py tool     # PreToolUse       -> append a call
     log.py done     # PostToolUse      -> attach the call's duration
     log.py stop     # Stop             -> mark the turn finished
+    log.py instr    # InstructionsLoaded -> note an instruction file mid-session
 
 Every session accumulates into its own file under sessions/, and whichever
 session was touched last is republished to state.json, which SkillMonitor.app
@@ -15,6 +16,7 @@ ownership of tool calls made in another.
 
 import fcntl
 import glob
+import hashlib
 import json
 import os
 import re
@@ -89,6 +91,115 @@ def is_known_skill(name, cwd):
         return bool(glob.glob(plugin_glob, recursive=True))
     except Exception:
         return False
+
+
+# --- instruction files (CLAUDE.md, memory, settings) ------------------------
+# These steer every turn yet never show up as a tool call. Each is fingerprinted
+# so two machines can be compared at a glance.
+
+def short_hash(path):
+    try:
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()[:7]
+    except Exception:
+        return None
+
+
+def instruction_kind(path):
+    if path.endswith(os.path.join("memory", "MEMORY.md")):
+        return "memory"
+    name = os.path.basename(path)
+    if name.startswith("settings") and name.endswith(".json"):
+        return "settings"
+    return "claude_md"
+
+
+def memory_entries(path):
+    try:
+        with open(path) as fh:
+            return sum(1 for line in fh if line.lstrip().startswith("- "))
+    except Exception:
+        return 0
+
+
+def instruction_entry(path, scope=None, reason=None):
+    entry = {
+        "kind": instruction_kind(path),
+        "scope": scope,
+        "path": path,
+        "hash": short_hash(path),
+        "reason": reason,
+    }
+    if entry["kind"] == "memory":
+        entry["count"] = memory_entries(path)
+    return entry
+
+
+def scan_instructions(cwd, transcript_path):
+    """What Claude Code would load for a session rooted at cwd."""
+    found = []
+    seen = set()
+
+    def add(path, scope, reason="scan"):
+        path = os.path.abspath(path)
+        if path in seen or not os.path.isfile(path):
+            return
+        seen.add(path)
+        found.append(instruction_entry(path, scope, reason))
+
+    home = os.path.expanduser("~")
+    add(os.path.join(home, ".claude", "CLAUDE.md"), "User")
+
+    if cwd:
+        # Ancestors are loaded too; list them outermost first.
+        chain = []
+        d = os.path.abspath(cwd)
+        while True:
+            chain.append(d)
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+        for d in reversed(chain):
+            add(os.path.join(d, "CLAUDE.md"), "Project")
+            add(os.path.join(d, ".claude", "CLAUDE.md"), "Project")
+            add(os.path.join(d, "CLAUDE.local.md"), "Local")
+
+    # Auto-memory lives beside the transcript, keyed by the launch directory.
+    if transcript_path:
+        add(os.path.join(os.path.dirname(transcript_path), "memory", "MEMORY.md"), "AutoMem")
+
+    add(os.path.join(home, ".claude", "settings.json"), "User")
+    if cwd:
+        add(os.path.join(cwd, ".claude", "settings.json"), "Project")
+        add(os.path.join(cwd, ".claude", "settings.local.json"), "Local")
+    return found
+
+
+def hook_total(instructions):
+    total = 0
+    for entry in instructions:
+        if entry.get("kind") != "settings":
+            continue
+        try:
+            with open(entry["path"]) as fh:
+                hooks = (json.load(fh) or {}).get("hooks") or {}
+            total += sum(len(g.get("hooks") or []) for groups in hooks.values() for g in groups)
+        except Exception:
+            pass
+    return total
+
+
+def refresh_instructions(previous, cwd, transcript_path):
+    """Rescan, keeping files that only an InstructionsLoaded event revealed
+    (nested CLAUDE.md files the scan cannot know about)."""
+    current = scan_instructions(cwd, transcript_path)
+    paths = {e["path"] for e in current}
+    for old in previous or []:
+        path = old.get("path")
+        if path and path not in paths and os.path.isfile(path):
+            current.append(instruction_entry(path, old.get("scope"), old.get("reason")))
+    return current
 
 
 def find_row(calls, call):
@@ -203,6 +314,8 @@ def main():
                 if invoked is None and is_injected(raw):
                     return
 
+                instructions = refresh_instructions(
+                    state.get("instructions"), cwd, event.get("transcript_path"))
                 state = {
                     "session": session_id,
                     "cwd": cwd,
@@ -211,6 +324,8 @@ def main():
                     "started": now(),
                     "updated": now(),
                     "calls": [],
+                    "instructions": instructions,
+                    "hooks": hook_total(instructions),
                 }
                 if invoked:
                     # Recorded here because a slash-invoked skill may be expanded
@@ -228,6 +343,31 @@ def main():
                 save_json(path, state)
                 publish(state)
                 prune_sessions()
+                return
+
+            if mode == "instr":
+                file_path = event.get("file_path")
+                if not file_path:
+                    return
+                if not state:
+                    state = {
+                        "session": session_id,
+                        "cwd": event.get("cwd"),
+                        "prompt": None,
+                        "status": "running",
+                        "started": now(),
+                        "calls": [],
+                    }
+                entry = instruction_entry(
+                    file_path, event.get("memory_type"), event.get("load_reason"))
+                entries = [e for e in (state.get("instructions") or [])
+                           if e.get("path") != file_path]
+                entries.append(entry)
+                state["instructions"] = entries
+                state["hooks"] = hook_total(entries)
+                state["updated"] = now()
+                save_json(path, state)
+                publish(state)
                 return
 
             if mode == "done":

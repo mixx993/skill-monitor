@@ -46,6 +46,47 @@ struct Call: Decodable, Identifiable, Equatable {
     }
 }
 
+/// An instruction file in effect for the session: CLAUDE.md, memory, settings.
+struct Instruction: Decodable, Identifiable, Equatable {
+    let kind: String        // claude_md | memory | settings
+    let scope: String?      // User | Project | Local | AutoMem
+    let path: String
+    let hash: String?
+    let reason: String?     // scan | session_start | nested_traversal | …
+    let count: Int?         // memory entries
+
+    var id: String { path }
+
+    var tag: String {
+        switch kind {
+        case "memory": return "记忆"
+        case "settings":
+            switch scope {
+            case "Project": return "项目设置"
+            case "Local": return "本地设置"
+            default: return "用户设置"
+            }
+        default:
+            if reason == "nested_traversal" { return "子目录" }
+            if reason == "include" { return "引用" }
+            switch scope {
+            case "User": return "全局"
+            case "Local": return "本地"
+            default: return "项目"
+            }
+        }
+    }
+
+    var displayPath: String {
+        // The memory path is long and says nothing the tag doesn't; show the count instead.
+        if kind == "memory" {
+            return "MEMORY.md" + (count.map { " · \($0) 条" } ?? "")
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+    }
+}
+
 struct TurnState: Decodable, Equatable {
     var prompt: String? = nil
     var status: String? = nil
@@ -53,6 +94,8 @@ struct TurnState: Decodable, Equatable {
     var updated: String? = nil
     var cwd: String? = nil
     var calls: [Call]? = nil
+    var instructions: [Instruction]? = nil
+    var hooks: Int? = nil
 }
 
 enum PillMode: Equatable {
@@ -79,13 +122,38 @@ final class Store: ObservableObject {
     init() {}
 
     /// Offscreen rendering only (tools/preview.swift).
-    init(preview: TurnState, mode: PillMode, flash: Call?) {
+    init(preview: TurnState, mode: PillMode, flash: Call?, showInstructions: Bool = false) {
         self.state = preview
         self.mode = mode
         self.flashCall = flash
+        self.showInstructions = showInstructions
     }
 
+    /// Whether the instruction-file list under the calls is open. Sticks
+    /// across hovers, like a preference.
+    @Published private(set) var showInstructions = false
+
     var calls: [Call] { state.calls ?? [] }
+    var instructions: [Instruction] { state.instructions ?? [] }
+
+    /// "CLAUDE.md 2 · 记忆 20 · 设置 1 · hook 5"
+    var instructionSummary: String {
+        let docs = instructions.filter { $0.kind == "claude_md" }.count
+        let memory = instructions.filter { $0.kind == "memory" }.compactMap { $0.count }.reduce(0, +)
+        let settings = instructions.filter { $0.kind == "settings" }.count
+        var parts: [String] = []
+        if docs > 0 { parts.append("CLAUDE.md \(docs)") }
+        if memory > 0 { parts.append("记忆 \(memory)") }
+        if settings > 0 { parts.append("设置 \(settings)") }
+        if let hooks = state.hooks, hooks > 0 { parts.append("hook \(hooks)") }
+        return parts.isEmpty ? "无指令文件" : parts.joined(separator: " · ")
+    }
+
+    func toggleInstructions() {
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.84)) {
+            showInstructions.toggle()
+        }
+    }
     var isRunning: Bool { state.status == "running" }
     /// How many skills the model reached for without being asked.
     var autoSkillCount: Int { calls.filter { $0.isAutoSkill }.count }
@@ -242,6 +310,31 @@ struct CallRow: View {
     }
 }
 
+struct InstructionRow: View {
+    let item: Instruction
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(item.tag)
+                .font(.system(size: 8.5, weight: .medium))
+                .foregroundColor(.white.opacity(0.55))
+                .frame(width: 44, alignment: .leading)
+            Text(item.displayPath)
+                .font(.system(size: 10))
+                .foregroundColor(.white.opacity(0.72))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 4)
+            if let hash = item.hash {
+                Text(hash)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.3))
+            }
+        }
+        .padding(.vertical, 1.5)
+    }
+}
+
 // MARK: - Island
 
 struct IslandView: View {
@@ -349,6 +442,43 @@ struct IslandView: View {
         .frame(height: 28)
     }
 
+    // What steers every turn without ever being a tool call.
+    private var instructionSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 0.5)
+                .padding(.top, 7)
+                .padding(.bottom, 6)
+            Button(action: { store.toggleInstructions() }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 8.5))
+                        .foregroundColor(.white.opacity(0.4))
+                    Text(store.instructionSummary)
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.5))
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Image(systemName: store.showInstructions ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundColor(.white.opacity(0.3))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if store.showInstructions {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(store.instructions) { item in
+                        InstructionRow(item: item)
+                    }
+                }
+                .padding(.top, 5)
+                .transition(.opacity)
+            }
+        }
+    }
+
     private var callList: some View {
         VStack(alignment: .leading, spacing: 1) {
             ForEach(store.calls) { call in
@@ -418,6 +548,9 @@ struct IslandView: View {
                 } else {
                     callList
                 }
+            }
+            if !store.instructions.isEmpty {
+                instructionSection
             }
         }
         .padding(.horizontal, 12)

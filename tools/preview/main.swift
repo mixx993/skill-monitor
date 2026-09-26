@@ -3,6 +3,10 @@
 import AppKit
 import SwiftUI
 
+// Built from the real home directory so the render shows the same "~/…"
+// shortening the app does, without putting anyone's username in the image.
+let home = FileManager.default.homeDirectoryForCurrentUser.path
+
 let demoCalls: [Call] = [
     Call(kind: "skill", server: nil, name: "hyperframes", count: 1, time: "04:52:30",
          origin: "user", ms: 120),
@@ -24,7 +28,21 @@ let demoState = TurnState(
     started: "04:52:30",
     updated: "04:54:02",
     cwd: "/Users/you/code/skill-monitor",
-    calls: demoCalls
+    calls: demoCalls,
+    instructions: [
+        Instruction(kind: "claude_md", scope: "User", path: home + "/.claude/CLAUDE.md",
+                    hash: "3fa91c2", reason: "scan", count: nil),
+        Instruction(kind: "claude_md", scope: "Project", path: home + "/code/video/CLAUDE.md",
+                    hash: "b07e5d1", reason: "scan", count: nil),
+        Instruction(kind: "claude_md", scope: "Project", path: home + "/code/video/scenes/CLAUDE.md",
+                    hash: "e4c2a90", reason: "nested_traversal", count: nil),
+        Instruction(kind: "memory", scope: "AutoMem",
+                    path: home + "/.claude/projects/-code/memory/MEMORY.md",
+                    hash: "91d0f3e", reason: "scan", count: 20),
+        Instruction(kind: "settings", scope: "User", path: home + "/.claude/settings.json",
+                    hash: "5c8b217", reason: "scan", count: nil),
+    ],
+    hooks: 5
 )
 
 struct Mock: View {
@@ -71,7 +89,7 @@ struct Mock: View {
                     .padding(.bottom, 8)
             }
         }
-        .frame(width: 700, height: 330)
+        .frame(width: 700, height: 420)
     }
 }
 
@@ -97,12 +115,12 @@ let out = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "."
 
 render(Mock(store: Store(preview: demoState, mode: .collapsed, flash: nil),
             caption: "collapsed — 5 次调用，其中 2 个 skill 是模型自己决定的"),
-       width: 700, height: 330, to: "\(out)/island-collapsed.png")
+       width: 700, height: 420, to: "\(out)/island-collapsed.png")
 
 render(Mock(store: Store(preview: demoState, mode: .flash, flash: demoCalls[2]),
             caption: "flash — 模型自己触发了 mixx-video-craft"),
-       width: 700, height: 330, to: "\(out)/island-flash.png")
+       width: 700, height: 420, to: "\(out)/island-flash.png")
 
-render(Mock(store: Store(preview: demoState, mode: .expanded, flash: nil),
-            caption: "expanded — 琥珀点 = 你没要求，模型自己调的"),
-       width: 700, height: 330, to: "\(out)/island-expanded.png")
+render(Mock(store: Store(preview: demoState, mode: .expanded, flash: nil, showInstructions: true),
+            caption: "expanded — 下方是本会话生效的指令文件，右侧短码是内容指纹"),
+       width: 700, height: 420, to: "\(out)/island-expanded.png")
