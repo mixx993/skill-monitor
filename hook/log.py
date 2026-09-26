@@ -28,6 +28,10 @@ SESSIONS = os.path.join(DIR, "sessions")
 STATE = os.path.join(DIR, "state.json")
 LOCK = os.path.join(DIR, ".lock")
 HISTORY = os.path.join(DIR, "history.jsonl")
+# Last fingerprint seen per instruction file, across all sessions, and the log
+# of every time one of them appeared, changed or vanished.
+FINGERPRINTS = os.path.join(DIR, "fingerprints.json")
+INSTRUCTION_LOG = os.path.join(DIR, "instructions.jsonl")
 
 MAX_CALLS = 60
 MAX_HISTORY_BYTES = 2 * 1024 * 1024
@@ -281,14 +285,72 @@ def prune_sessions():
         pass
 
 
-def append_history(record):
+def append_line(log, record):
     try:
-        if os.path.exists(HISTORY) and os.path.getsize(HISTORY) > MAX_HISTORY_BYTES:
-            os.replace(HISTORY, HISTORY + ".1")
-        with open(HISTORY, "a") as fh:
+        if os.path.exists(log) and os.path.getsize(log) > MAX_HISTORY_BYTES:
+            os.replace(log, log + ".1")
+        with open(log, "a") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
         pass
+
+
+def append_history(record):
+    append_line(HISTORY, record)
+
+
+def log_instruction_changes(entries, session_id):
+    """Log only what differs from the last fingerprint seen for each file.
+
+    The baseline is global rather than per session: a new session is not a
+    change, and auto-memory in particular is rewritten by the model itself,
+    so what matters is when a file's content moved, whichever session saw it.
+    """
+    seen = load_json(FINGERPRINTS)
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    dirty = False
+
+    for entry in entries:
+        path, digest = entry.get("path"), entry.get("hash")
+        if not path or not digest:
+            continue
+        before = seen.get(path)
+        if before is None:
+            event = "first_seen"
+        elif before.get("hash") != digest:
+            event = "changed"
+        else:
+            continue
+        record = {
+            "ts": stamp,
+            "event": event,
+            "session": session_id,
+            "kind": entry.get("kind"),
+            "scope": entry.get("scope"),
+            "path": path,
+            "hash": digest,
+            "prev_hash": (before or {}).get("hash"),
+        }
+        if entry.get("kind") == "memory":
+            record["count"] = entry.get("count")
+            record["prev_count"] = (before or {}).get("count")
+        append_line(INSTRUCTION_LOG, record)
+        seen[path] = {"hash": digest, "count": entry.get("count")}
+        dirty = True
+
+    # Only a file that is gone from disk counts as removed; one that merely
+    # belongs to a different project than this session's does not.
+    for path in list(seen):
+        if not os.path.exists(path):
+            append_line(INSTRUCTION_LOG, {
+                "ts": stamp, "event": "removed", "session": session_id,
+                "path": path, "prev_hash": seen[path].get("hash"),
+            })
+            del seen[path]
+            dirty = True
+
+    if dirty:
+        save_json(FINGERPRINTS, seen)
 
 
 def main():
@@ -327,6 +389,7 @@ def main():
                     "instructions": instructions,
                     "hooks": hook_total(instructions),
                 }
+                log_instruction_changes(instructions, session_id)
                 if invoked:
                     # Recorded here because a slash-invoked skill may be expanded
                     # by the harness and never reach PreToolUse at all.
@@ -363,6 +426,7 @@ def main():
                 entries = [e for e in (state.get("instructions") or [])
                            if e.get("path") != file_path]
                 entries.append(entry)
+                log_instruction_changes([entry], session_id)
                 state["instructions"] = entries
                 state["hooks"] = hook_total(entries)
                 state["updated"] = now()

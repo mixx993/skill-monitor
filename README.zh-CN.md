@@ -109,13 +109,27 @@ skill 和 MCP 只是影响结果的一部分。`CLAUDE.md`、记忆、设置每�
 
 - `~/.claude/skill-monitor/sessions/<session_id>.json` — 每个会话各自的账本
 - `~/.claude/skill-monitor/state.json` — **最近活跃**的那个会话的副本，岛只读它
-- `~/.claude/skill-monitor/history.jsonl` — 跨会话流水（带 session_id、cwd），超过 2MB 自动轮转
+- `~/.claude/skill-monitor/history.jsonl` — 跨会话的调用流水（带 session_id、cwd），超过 2MB 自动轮转
+- `~/.claude/skill-monitor/instructions.jsonl` — 指令文件的**变化记录**：首次出现、内容变化、被删除
+- `~/.claude/skill-monitor/fingerprints.json` — 每个指令文件最后一次见到的指纹，用来判断有没有变
 
-用来统计「哪些 skill 装了但从没用过」：
+统计「哪些 skill 装了但从没用过」：
 
 ```bash
-cut -d'"' -f16 ~/.claude/skill-monitor/history.jsonl | sort | uniq -c | sort -rn
+jq -r 'select(.kind=="skill") | .name' ~/.claude/skill-monitor/history.jsonl \
+  | sort | uniq -c | sort -rn
 ```
+
+看指令文件什么时候变过（首次出现的记录除外）：
+
+```bash
+jq -r 'select(.event!="first_seen") | "\(.ts)  \(.event)  \(.path)"' \
+  ~/.claude/skill-monitor/instructions.jsonl
+```
+
+指令变化只在指纹不同的时候才记，发消息但文件没变不会记，开新会话也不算变化。
+记忆是 Claude 自己写的，所以这份记录里 `MEMORY.md` 的变化，就是 AI 修改了自己以后要遵守的规则的时间点，
+还会带上记忆条数的前后对比。
 
 ## 界面：灵动岛
 

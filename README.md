@@ -92,7 +92,9 @@ Five hooks feed one state file that the app polls:
 ├── sessions/<session_id>.json   per-session ledger
 ├── state.json                   a copy of whichever session was touched last
 ├── config.json                  which apps the island shows for
-└── history.jsonl                append-only log across all sessions
+├── history.jsonl                append-only log of calls across all sessions
+├── instructions.jsonl           when an instruction file appeared, changed or vanished
+└── fingerprints.json            last fingerprint seen per instruction file
 ```
 
 Find skills you installed and never use:
@@ -123,6 +125,19 @@ comparing those codes: same code, same file.
 What this cannot show: Claude Code's own built-in system prompt, which is not a
 file and changes with the Claude Code version; and how much any one file
 actually changed the outcome.
+
+See when your instructions changed:
+
+```bash
+jq -r 'select(.event!="first_seen") | "\(.ts)  \(.event)  \(.path)"' \
+  ~/.claude/skill-monitor/instructions.jsonl
+```
+
+A line is written only when a fingerprint differs from the last one seen for
+that file — sending a message with nothing changed writes nothing, and starting
+a new session is not a change. Auto-memory is written by Claude itself, so a
+`MEMORY.md` entry here marks when the model rewrote the rules it will follow
+from then on, with the entry count before and after.
 
 ## Notes from building it
 
@@ -180,8 +195,8 @@ python3 tests/test_hook.py
 
 Runs `hook/log.py` as a subprocess against a throwaway `HOME`, so it cannot
 touch a real `~/.claude`. Covers dedup, origin attribution, the claim rule,
-duration capture, injected-prompt filtering, session isolation, and
-instruction-file discovery and fingerprinting. CI runs
+duration capture, injected-prompt filtering, session isolation,
+instruction-file discovery and fingerprinting, and change logging. CI runs
 these plus a universal build on every push.
 
 ## License

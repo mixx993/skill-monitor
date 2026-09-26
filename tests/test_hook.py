@@ -51,6 +51,14 @@ def check(label, got, want):
         failures.append(label)
 
 
+def log_lines(name):
+    path = os.path.join(home, ".claude", "skill-monitor", name)
+    if not os.path.exists(path):
+        return []
+    with open(path) as fh:
+        return [json.loads(line) for line in fh if line.strip()]
+
+
 def write(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as fh:
@@ -186,6 +194,38 @@ def main():
               nested in {e["path"] for e in state()["instructions"]}, True)
         check("calls were reset but instructions were not",
               (rows(), len(state()["instructions"])), ([], 5))
+
+        print("instruction changes are logged, and only changes")
+        events = lambda: [(e["event"], os.path.basename(e["path"]))
+                          for e in log_lines("instructions.jsonl")]
+        # Four files seen on C's first prompt, then proj/CLAUDE.md edited,
+        # then the nested file loaded mid-session.
+        check("first sight of each file, then the edit, then the nested load", events(), [
+            ("first_seen", "CLAUDE.md"), ("first_seen", "CLAUDE.md"),
+            ("first_seen", "MEMORY.md"), ("first_seen", "settings.json"),
+            ("changed", "CLAUDE.md"), ("first_seen", "CLAUDE.md")])
+        count = len(events())
+        fire("prompt", {"session_id": "C", "cwd": project,
+                        "transcript_path": transcript, "prompt": "nothing changed"})
+        check("an unchanged prompt logs nothing", len(events()), count)
+        fire("prompt", {"session_id": "D", "cwd": project,
+                        "transcript_path": transcript, "prompt": "new session"})
+        check("a new session is not a change", len(events()), count)
+
+        write(os.path.join(transcript_dir, "memory", "MEMORY.md"),
+              "- [a](a.md) — one\n- [b](b.md) — two\n- [c](c.md) — three\n- [d](d.md) — four\n")
+        fire("prompt", {"session_id": "C", "cwd": project,
+                        "transcript_path": transcript, "prompt": "memory grew"})
+        last = log_lines("instructions.jsonl")[-1]
+        check("a memory edit records the entry count moving",
+              (last["event"], last["prev_count"], last["count"]), ("changed", 3, 4))
+
+        os.remove(nested)
+        fire("prompt", {"session_id": "C", "cwd": project,
+                        "transcript_path": transcript, "prompt": "file gone"})
+        last = log_lines("instructions.jsonl")[-1]
+        check("a deleted file is logged as removed",
+              (last["event"], last["path"]), ("removed", nested))
     finally:
         shutil.rmtree(home, ignore_errors=True)
 
