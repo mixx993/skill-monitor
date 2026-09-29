@@ -122,7 +122,8 @@ class CodexTest(unittest.TestCase):
         skill = self.skill(root=self.repo / "skills with spaces")
         command = shlex.join(["bash", "-lc", "cat " + shlex.quote(str(skill.relative_to(self.repo)))])
         self.tool(tool_name="Bash", tool_input={"command": command})
-        self.assertEqual(self.state()["calls"][0]["path"], str(skill))
+        # macOS /var is a symlink to /private/var; the adapter stores canonical paths.
+        self.assertEqual(self.state()["calls"][0]["path"], str(skill.resolve()))
 
     def test_duplicate_events_and_steering_keep_counts(self):
         self.emit("UserPromptSubmit", prompt="one")

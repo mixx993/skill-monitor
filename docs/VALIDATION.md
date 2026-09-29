@@ -17,17 +17,19 @@ concurrent calls, call-ID pairing, delayed events, read detection, instruction
 candidates, installation preservation and malformed input. They do not run a
 real Codex model session.
 
-Pending:
-
-- macOS Swift compilation and universal bundle validation.
-- Offscreen UI rendering, including the new Codex fixture.
+Pending live acceptance:
 - Real Codex CLI `/hooks` trust and end-to-end event delivery on a Mac.
 - Frontmost-app visibility, hover interaction and simultaneous Claude sessions.
 
-The updated GitHub Actions workflow defines the Mac build and preview steps.
-They have NOT run for this change: public-repository upload was blocked by
-automatic approval review pending explicit authorization to publish. No
-remote branch, PR or release was created during this development pass.
+Publication was explicitly authorized after the initial local development pass.
+The branch is published in [draft PR #1](https://github.com/mixx993/skill-monitor/pull/1).
+Its GitHub Actions checks track macOS Swift compilation, universal bundle
+validation and offscreen UI rendering. Consult the latest PR check for the
+current build result; these are separate from real Codex session acceptance.
+
+The first Mac CI run found a test-path expectation that did not account for
+macOS's `/var` -> `/private/var` symlink. The expectation now compares canonical
+paths, matching the adapter's existing path normalization.
 
 See `CODEX.md` for installation and the live acceptance checklist. This is a
 source preview, not a verified macOS release binary.
