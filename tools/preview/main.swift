@@ -60,7 +60,8 @@ struct Mock: View {
             // menu bar text, so the island can be judged against real chrome
             HStack(spacing: 14) {
                 Image(systemName: "applelogo").font(.system(size: 11))
-                Text("Claude").font(.system(size: 11, weight: .semibold))
+                Text(store.state.source == "codex" ? "Terminal" : "Claude")
+                    .font(.system(size: 11, weight: .semibold))
                 Text("File").font(.system(size: 11))
                 Text("Edit").font(.system(size: 11))
                 Spacer()

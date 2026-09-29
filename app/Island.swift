@@ -387,7 +387,9 @@ struct CallRow: View {
             Text(call.duration ?? call.time)
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundColor(.white.opacity(0.32))
-                .frame(width: 38, alignment: .trailing)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: 46, alignment: .trailing)
         }
         .padding(.vertical, 2.5)
     }
