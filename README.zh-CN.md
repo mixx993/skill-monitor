@@ -1,5 +1,11 @@
 # SkillMonitor
 
+**Codex 预览版：**本分支新增本地 Codex CLI 适配器，灵动岛可在 Claude／Codex
+之间切换。Mac 上准备 Python 3.11+、Xcode 命令行工具以及支持 `/hooks` 的
+Codex CLI 后，运行 `./install-codex.sh`，再到 Codex `/hooks` 审阅并信任新增的
+Hook。详见[安装说明与能力边界](docs/CODEX.md)。技能列表区分“用户指定”和
+“读取请求”，不会把文件读取误报为技能成功执行，也不会猜测自动调用来源。
+
 [![CI](https://github.com/mixx993/skill-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/mixx993/skill-monitor/actions/workflows/ci.yml)
 
 [English](README.md) · **中文**

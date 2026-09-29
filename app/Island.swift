@@ -1,6 +1,35 @@
 import AppKit
 import SwiftUI
 
+/// Shared display preferences. The old Claude-only configuration still works.
+enum MonitorConfig {
+    static let home = FileManager.default.homeDirectoryForCurrentUser
+    static let url = home.appendingPathComponent(".config/skill-monitor/config.json")
+    static let legacyURL = home.appendingPathComponent(".claude/skill-monitor/config.json")
+
+    static func read(_ url: URL) -> [String: Any] {
+        guard let data = try? Data(contentsOf: url),
+              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return value
+    }
+
+    static var stateURLs: [URL] {
+        let defaults = [home.appendingPathComponent(".claude/skill-monitor/state.json").path,
+                        home.appendingPathComponent(".codex/skill-monitor/state.json").path]
+        let paths = read(url)["stateFiles"] as? [String] ?? defaults
+        return Array(Set(paths)).map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+    }
+
+    static var hostBundleIDs: Set<String> {
+        let settings = read(url)
+        let legacy = read(legacyURL)
+        let ids = settings["showWhenFrontmost"] as? [String]
+            ?? legacy["showWhenFrontmost"] as? [String]
+            ?? ["com.anthropic.claudefordesktop"]
+        return Set(ids)
+    }
+}
+
 // MARK: - Model
 
 struct Call: Decodable, Identifiable, Equatable {
@@ -14,6 +43,8 @@ struct Call: Decodable, Identifiable, Equatable {
     let origin: String?
     /// Wall time of the call in milliseconds, when known.
     let ms: Int?
+    var path: String? = nil
+    var evidence: String? = nil
 
     /// Only skills carry this signal — MCP tools are always model-chosen.
     var isAutoSkill: Bool { isSkill && origin == "auto" }
@@ -24,7 +55,7 @@ struct Call: Decodable, Identifiable, Equatable {
         return String(format: "%.1fs", Double(ms) / 1000)
     }
 
-    var id: String { "\(kind)|\(server ?? "-")|\(name)" }
+    var id: String { "\(kind)|\(server ?? "-")|\(name)|\(path ?? "")" }
     var isSkill: Bool { kind == "skill" }
 
     /// Keeps the island from stretching across the screen on long MCP tool names.
@@ -58,6 +89,7 @@ struct Instruction: Decodable, Identifiable, Equatable {
     var id: String { path }
 
     var tag: String {
+        if reason == "candidate" { return "候选文件" }
         switch kind {
         case "memory": return "记忆"
         case "settings":
@@ -96,6 +128,9 @@ struct TurnState: Decodable, Equatable {
     var calls: [Call]? = nil
     var instructions: [Instruction]? = nil
     var hooks: Int? = nil
+    var source: String? = nil
+    var session: String? = nil
+    var turn_id: String? = nil
 }
 
 enum PillMode: Equatable {
@@ -111,8 +146,9 @@ final class Store: ObservableObject {
     @Published private(set) var mode: PillMode = .collapsed
     @Published private(set) var flashCall: Call?
 
-    private let url = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".claude/skill-monitor/state.json")
+    private let urls = MonitorConfig.stateURLs
+    @Published private(set) var selectedSource = "all"
+    private(set) var activeURL: URL?
     private var poll: Timer?
     private var flashTimer: Timer?
     private var lastStamp: Date?
@@ -135,14 +171,31 @@ final class Store: ObservableObject {
 
     var calls: [Call] { state.calls ?? [] }
     var instructions: [Instruction] { state.instructions ?? [] }
+    var sourceLabel: String {
+        if state.source == "codex" || (activeURL == nil && selectedSource == "codex") { return "Codex" }
+        return activeURL == nil && state.prompt == nil ? "等待事件" : "Claude"
+    }
+    var dataDirectory: URL {
+        activeURL?.deletingLastPathComponent() ?? MonitorConfig.url.deletingLastPathComponent()
+    }
+
+    func selectSource(_ source: String) {
+        selectedSource = source
+        activeURL = nil
+        lastStamp = nil
+        seeded = false
+        reload(force: true)
+    }
 
     /// "CLAUDE.md 2 · 记忆 20 · 设置 1 · hook 5"
     var instructionSummary: String {
         let docs = instructions.filter { $0.kind == "claude_md" }.count
+        let agents = instructions.filter { $0.kind == "agents_md" }.count
         let memory = instructions.filter { $0.kind == "memory" }.compactMap { $0.count }.reduce(0, +)
         let settings = instructions.filter { $0.kind == "settings" }.count
         var parts: [String] = []
         if docs > 0 { parts.append("CLAUDE.md \(docs)") }
+        if agents > 0 { parts.append("AGENTS 候选 \(agents)") }
         if memory > 0 { parts.append("记忆 \(memory)") }
         if settings > 0 { parts.append("设置 \(settings)") }
         if let hooks = state.hooks, hooks > 0 { parts.append("hook \(hooks)") }
@@ -182,15 +235,29 @@ final class Store: ObservableObject {
     }
 
     private func reload(force: Bool) {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-        guard let stamp = attrs?[.modificationDate] as? Date else { return }
-        if !force, let last = lastStamp, last == stamp { return }
+        let candidates: [(URL, Date, TurnState)] = urls.compactMap { url in
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let stamp = attrs[.modificationDate] as? Date,
+                  let data = try? Data(contentsOf: url),
+                  let next = try? JSONDecoder().decode(TurnState.self, from: data) else { return nil }
+            let source = next.source ?? "claude"
+            guard selectedSource == "all" || selectedSource == source else { return nil }
+            return (url, stamp, next)
+        }
+        guard let (url, stamp, next) = candidates.max(by: { $0.1 < $1.1 }) else {
+            state = TurnState()
+            activeURL = nil
+            lastStamp = nil
+            flashTimer?.invalidate()
+            flashCall = nil
+            if !hovering { mode = .collapsed }
+            return
+        }
+        if !force, activeURL == url, lastStamp == stamp { return }
+        let sameTurn = activeURL == url && state.session == next.session && state.turn_id == next.turn_id
+        let fresh = newestCall(before: sameTurn ? state.calls ?? [] : [], after: next.calls ?? [])
+        activeURL = url
         lastStamp = stamp
-
-        guard let data = try? Data(contentsOf: url),
-              let next = try? JSONDecoder().decode(TurnState.self, from: data) else { return }
-
-        let fresh = newestCall(before: state.calls ?? [], after: next.calls ?? [])
         withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
             state = next
         }
@@ -295,6 +362,22 @@ struct CallRow: View {
                 .font(.system(size: 11.5))
                 .lineLimit(1)
                 .truncationMode(.middle)
+            if call.isSkill && call.origin == "unknown" {
+                Text("?")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.45))
+                    .help("已观察到技能文件读取请求；无法确定是否由用户指定，也不代表技能已成功执行")
+            }
+            if call.evidence == "explicit_request" {
+                Text("指定")
+                    .font(.system(size: 8))
+                    .foregroundColor(.white.opacity(0.45))
+                    .help("用户以 $名称 引用了本地技能，尚未观察到读取请求")
+            } else if call.evidence == "read_attempt" {
+                Text("读请求")
+                    .font(.system(size: 8))
+                    .foregroundColor(.white.opacity(0.45))
+            }
             Spacer(minLength: 4)
             if call.count > 1 {
                 Text("×\(call.count)")
@@ -304,7 +387,9 @@ struct CallRow: View {
             Text(call.duration ?? call.time)
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundColor(.white.opacity(0.32))
-                .frame(width: 38, alignment: .trailing)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: 46, alignment: .trailing)
         }
         .padding(.vertical, 2.5)
     }
@@ -378,11 +463,11 @@ struct IslandView: View {
             .overlay(HoverTracker { store.setHover($0) })
             .contextMenu {
                 Button("打开数据目录") {
-                    NSWorkspace.shared.open(
-                        FileManager.default.homeDirectoryForCurrentUser
-                            .appendingPathComponent(".claude/skill-monitor")
-                    )
+                    NSWorkspace.shared.open(store.dataDirectory)
                 }
+                Button("全部来源（最近活动）") { store.selectSource("all") }
+                Button("只看 Claude") { store.selectSource("claude") }
+                Button("只看 Codex") { store.selectSource("codex") }
                 Divider()
                 Button("退出 SkillMonitor") { NSApp.terminate(nil) }
             }
@@ -494,7 +579,7 @@ struct IslandView: View {
                 Circle()
                     .fill(store.isRunning ? liveColor : Color.white.opacity(0.28))
                     .frame(width: 5.5, height: 5.5)
-                Text("本次任务")
+                Text("\(store.sourceLabel) · 本次任务")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.white)
                 if let project = store.project {
@@ -558,4 +643,3 @@ struct IslandView: View {
         .frame(width: 292, alignment: .leading)
     }
 }
-
