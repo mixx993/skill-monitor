@@ -11,7 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Editable at ~/.claude/skill-monitor/config.json — add a terminal's
     /// bundle id (com.apple.Terminal, com.googlecode.iterm2, …) to see it
     /// while running the CLI there.
-    private var hostBundleIDs: Set<String> = ["com.anthropic.claudefordesktop"]
+    private var hostBundleIDs: Set<String> = MonitorConfig.hostBundleIDs
 
     private var configURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -75,6 +75,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func loadConfig() {
+        if FileManager.default.fileExists(atPath: MonitorConfig.url.path) {
+            hostBundleIDs = MonitorConfig.hostBundleIDs
+            return
+        }
         if let data = try? Data(contentsOf: configURL),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let ids = obj["showWhenFrontmost"] as? [String], !ids.isEmpty {

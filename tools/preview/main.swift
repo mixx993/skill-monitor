@@ -124,3 +124,22 @@ render(Mock(store: Store(preview: demoState, mode: .flash, flash: demoCalls[2]),
 render(Mock(store: Store(preview: demoState, mode: .expanded, flash: nil, showInstructions: true),
             caption: "expanded — 下方是本会话生效的指令文件，右侧短码是内容指纹"),
        width: 700, height: 420, to: "\(out)/island-expanded.png")
+
+let codexCalls = [
+    Call(kind: "skill", server: nil, name: "video-craft", count: 1, time: "04:52:30",
+         origin: "user", ms: nil, path: home + "/.agents/skills/video-craft/SKILL.md", evidence: "explicit_request"),
+    Call(kind: "skill", server: nil, name: "docs", count: 1, time: "04:53:04",
+         origin: "unknown", ms: 88, path: home + "/.agents/skills/docs/SKILL.md", evidence: "read_attempt"),
+    Call(kind: "mcp", server: "docs", name: "search", count: 3, time: "04:54:02",
+         origin: nil, ms: 610, evidence: "tool_hook")
+]
+let codexState = TurnState(
+    prompt: "$video-craft 做个产品短片", status: "running", cwd: home + "/code/video",
+    calls: codexCalls,
+    instructions: [Instruction(kind: "agents_md", scope: "Project", path: home + "/code/video/AGENTS.md",
+                               hash: "ab123ef", reason: "candidate", count: nil)],
+    source: "codex", session: "fixture", turn_id: "fixture-turn"
+)
+render(Mock(store: Store(preview: codexState, mode: .expanded, flash: nil, showInstructions: true),
+            caption: "Codex — 区分用户指定与读取请求，来源未知时不猜测"),
+       width: 700, height: 420, to: "\(out)/island-codex.png")

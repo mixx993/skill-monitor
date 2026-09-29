@@ -12,8 +12,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python for Codex adapter
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Hook behaviour tests
-        run: python3 tests/test_hook.py
+        run: |
+          python3 tests/test_hook.py
+          python3 -m unittest discover -s tests -p 'test_codex*.py' -v
 
       - name: Build (universal)
         run: UNIVERSAL=1 ./build.sh
@@ -31,7 +38,18 @@ jobs:
         run: |
           swiftc -O -framework AppKit -framework SwiftUI \
             -o /tmp/preview-tool app/Island.swift tools/preview/main.swift
-          /tmp/preview-tool "$(mktemp -d)"
+          mkdir -p dist/previews
+          /tmp/preview-tool dist/previews
+
+      - name: Package test build
+        run: ditto -c -k --keepParent dist/SkillMonitor.app dist/SkillMonitor-codex-preview.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SkillMonitor-codex-preview
+          path: |
+            dist/SkillMonitor-codex-preview.zip
+            dist/previews/*.png
 
       - name: Shell scripts parse
-        run: for f in install.sh uninstall.sh build.sh; do bash -n "$f"; done
+        run: for f in install.sh uninstall.sh install-codex.sh uninstall-codex.sh build.sh; do bash -n "$f"; done

@@ -8,6 +8,14 @@ A Dynamic Island for Claude Code. It hangs under your MacBook's notch and shows
 which skills and MCP tools the current task is using — and, for skills, whether
 you asked for them or the model reached for them on its own.
 
+**Codex preview:** this branch adds a local Codex CLI adapter and a shared island
+with Claude/Codex source switching. On macOS, with Python 3.11+, Xcode Command
+Line Tools, and a Codex version that supports `/hooks`, run `./install-codex.sh`.
+Review/trust the registered hooks in Codex `/hooks`, then start a conversation.
+See [Codex setup, evidence limits and live acceptance checklist](docs/CODEX.md).
+Codex skill rows distinguish explicit requests from observed file-read attempts;
+they do **not** assert successful skill execution or infer automatic origin.
+
 ![expanded](docs/island-expanded.png)
 
 ## Why
@@ -184,8 +192,9 @@ swiftc -O -framework AppKit -framework SwiftUI \
 | `tools/preview/` | Offscreen renderer for design work |
 | `tests/test_hook.py` | Behavioural tests for the hook |
 
-The app knows nothing about Claude Code — it renders one JSON file. Pointing it
-at another agent means writing another adapter, not touching the app.
+The shared app renders adapter JSON snapshots. It reads legacy Claude data and
+configured Codex data, labels the source, and offers source filters in its
+context menu. The two adapters keep independent ledgers.
 
 ## Tests
 
